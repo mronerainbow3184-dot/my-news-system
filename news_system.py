@@ -9,42 +9,64 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from google import genai
 
-# --- 1. 環境変数（GitHub Secrets）からの読み込み ---
-# セキュリティのため、直接書き込まずに環境変数から取得するように変更しています
+# --- 設定 ---
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
 DATABASE_ID = "3316352339af8056a2e5f0939ba88e7d"
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-# Gmail通知設定
 GMAIL_ADDRESS = "mr.onerainbow3184@gmail.com"
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
 
-# Gemini初期化
 client_gemini = genai.Client(api_key=GEMINI_API_KEY)
-TARGET_MODEL = "gemini-2.5-flash" 
+TARGET_MODEL = "gemini-2.0-flash" # 最新の名前に修正しました
 
 def get_notion_data():
-    print(">> Notionからキーワードを取得中...")
+    print(">> Notionからデータを取得中...")
     url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
     headers = {
         "Authorization": f"Bearer {NOTION_TOKEN}",
         "Notion-Version": "2022-06-28",
         "Content-Type": "application/json"
     }
+    
+    # 【診断用】まずフィルタなしで全データを取得して構造を確認
+    try:
+        diag_res = requests.post(url, headers=headers, json={})
+        diag_data = diag_res.json()
+        if "results" in diag_data and len(diag_data["results"]) > 0:
+            properties = diag_data["results"][0]["properties"]
+            print(f"DEBUG: Notionで見つかった列名一覧: {list(properties.keys())}")
+        else:
+            print("DEBUG: データベースにデータが1件もありません、またはアクセス権がありません。")
+    except Exception as e:
+        print(f"DEBUG: 診断中にエラー: {e}")
+
+    # 本番の取得処理
+    # もし列名が 'Active' ではなく 'チェックボックス' などならここを修正する必要があります
     payload = {"filter": {"property": "Active", "checkbox": {"equals": True}}}
+    
     try:
         response = requests.post(url, json=payload, headers=headers)
         data = response.json()
+        
+        if "object" in data and data["object"] == "error":
+            print(f"!! Notion APIエラー: {data.get('message')}")
+            return []
+
         configs = []
         for page in data.get("results", []):
             p = page.get("properties", {})
-            name = p["Name"]["title"][0]["plain_text"] if p.get("Name") and p["Name"]["title"] else "ニュース"
-            # 以前相談した「Period」プロパティがあれば取得、なければ1d
-            period = p.get("Period", {}).get("select", {}).get("name", "1d")
+            # Name列の取得（Notionのタイトル列の名前が 'Name' か確認）
+            name_prop = p.get("Name") or p.get("名前") or p.get("title")
+            name = name_prop["title"][0]["plain_text"] if name_prop and name_prop["title"] else "ニュース"
+            
+            # Period列の取得
+            period_prop = p.get("Period") or p.get("期間")
+            period = period_prop.get("select", {}).get("name", "1d") if period_prop and period_prop.get("select") else "1d"
+            
             configs.append({"name": name, "period": period})
         return configs
     except Exception as e:
-        print(f"   ! Notion取得エラー: {e}")
+        print(f" ! Notion取得エラー: {e}")
         return []
 
 def send_html_email(summaries):
@@ -60,7 +82,6 @@ def send_html_email(summaries):
     <body style="font-family: sans-serif; color: #333; line-height: 1.6;">
         <h2 style="color: #1a73e8; border-bottom: 2px solid #1a73e8; padding-bottom: 8px;">☀️ 本日のニュース要約</h2>
     """
-    
     for item in summaries:
         html_body += f"""
         <div style="margin-bottom: 30px; padding: 15px; background-color: #f8f9fa; border-radius: 8px; border-left: 5px solid #1a73e8;">
@@ -71,7 +92,6 @@ def send_html_email(summaries):
             </div>
         </div>
         """
-    
     html_body += "<p style='font-size: 12px; color: #777;'>※GitHub Actionsより自動配信</p></body></html>"
     msg.attach(MIMEText(html_body, "html"))
 
@@ -79,9 +99,9 @@ def send_html_email(summaries):
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
             server.send_message(msg)
-        print("   ✓ HTMLメールを送信しました。")
+        print(" ✓ HTMLメールを送信しました。")
     except Exception as e:
-        print(f"   ! メール送信エラー: {e}")
+        print(f" ! メール送信エラー: {e}")
 
 def run_news_flow():
     configs = get_notion_data()
@@ -91,8 +111,7 @@ def run_news_flow():
 
     all_summaries = []
     for i, conf in enumerate(configs):
-        if i > 0: time.sleep(2) # 待機時間を短縮
-        
+        if i > 0: time.sleep(2)
         print(f">> 取得・要約中: {conf['name']} ({conf['period']})")
         query = urllib.parse.quote(conf["name"])
         rss_url = f"https://news.google.com/rss/search?q={query}+when:{conf['period']}&hl=ja&gl=JP&ceid=JP:ja"
@@ -100,7 +119,7 @@ def run_news_flow():
         
         feed = feedparser.parse(rss_url)
         if not feed.entries:
-            print(f"   ! ニュースが見つかりませんでした")
+            print(f" ! ニュースが見つかりませんでした")
             continue
             
         titles = "\n".join([f"- {e.title}" for e in feed.entries[:5]])
@@ -109,13 +128,10 @@ def run_news_flow():
         try:
             response = client_gemini.models.generate_content(model=TARGET_MODEL, contents=prompt)
             all_summaries.append({
-                "name": conf["name"],
-                "period": conf["period"],
-                "summary": response.text,
-                "url": display_url
+                "name": conf["name"], "period": conf["period"], "summary": response.text, "url": display_url
             })
         except Exception as e:
-            print(f"   ! Geminiエラー: {e}")
+            print(f" ! Geminiエラー: {e}")
 
     if all_summaries:
         send_html_email(all_summaries)
@@ -124,3 +140,4 @@ if __name__ == "__main__":
     print("--- NewsFetcher System [GitHub Actions Mode] ---")
     run_news_flow()
     print("--- 全ての処理が完了しました ---")
+    
