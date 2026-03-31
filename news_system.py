@@ -12,7 +12,7 @@ from google import genai
 # --- 1. 環境変数（GitHub Secrets）からの読み込み ---
 # セキュリティのため、直接書き込まずに環境変数から取得するように変更しています
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
-DATABASE_ID = "3316352339af8056a2e5f0939ba88e7d"
+DATABASE_ID = "3316352339af808bb4ed000c458fa67a"
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # Gmail通知設定
