@@ -17,7 +17,7 @@ GMAIL_ADDRESS = "mr.onerainbow3184@gmail.com"
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
 
 client_gemini = genai.Client(api_key=GEMINI_API_KEY)
-TARGET_MODEL = "gemini-2.0-flash" # 最新の名前に修正しました
+TARGET_MODEL = "gemini-2.5-flash" # 最新の名前に修正しました
 
 def get_notion_data():
     print(">> Notionからデータを取得中...")
@@ -140,4 +140,3 @@ if __name__ == "__main__":
     print("--- NewsFetcher System [GitHub Actions Mode] ---")
     run_news_flow()
     print("--- 全ての処理が完了しました ---")
-    
